@@ -11,13 +11,14 @@ from memory_ops import save_memory_chat, memory_edit
 @tool
 def save_chat_memory(content: str) -> str:
     """Save a new piece of information about the user to long-term memory.
-    Use this when the user shares a fact, preference, goal, or event worth remembering,
-    such as something they're learning, a plan, a personal detail, or a completed task.
-    Do not use this for casual chat that has no lasting value.
+
+    Call this whenever the user makes any statement about themselves, their belongings,
+    their preferences, plans, or activities — even a simple sentence like "I have X"
+    or "I like Y" counts and should be saved. Do not use this for casual chat, greetings,
+    or questions.
 
     Args:
         content: The information to remember, written as a clear, standalone sentence.
-
     """
     # Note: the docstring above IS the tool description the LLM sees — it's not
     # just documentation for humans, it directly affects when the model decides

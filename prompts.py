@@ -50,17 +50,7 @@ Response:"""
 # Final answer-generation prompt, given the question plus retrieved memory chunks.
 # Explicitly told to only use the provided context, no outside knowledge.
 answer_prompt = PromptTemplate.from_template(
-    """You are answering a question using the user's personal memory notes below.
-
-Memory excerpts:
-{context}
-
-Question: {question}
-
-Instructions:
-- Answer using only the information in the memory excerpts above.
-- If the excerpts don't contain enough information to answer, say "I don't have a memory about that."
-- Be concise and direct. """)
+    """ """)
 
 # Used by memory_edit(): given a handful of candidate chunks, picks which one the
 # edit is actually about and returns just its Chroma id (or NONE).
