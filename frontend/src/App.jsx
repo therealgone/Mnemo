@@ -1,70 +1,95 @@
-import { useState, useRef, useEffect } from 'react'
-import './App.css'
+import { useCallback, useEffect, useState } from 'react'
+import Rail from './Rail'
+import Chat from './Chat'
+import Saved_Memory from './Saved-Memory'
+import Settings from './Settings'
+
+const LABELS = {
+  chat: ['chat', 'talk to your model'],
+  memory: ['memory', 'saved notes & recall'],
+  settings: ['settings', 'local ollama only'],
+}
+
+const HEADER_DOT = {
+  ready: 'bg-agent',
+  disconnected: 'bg-error',
+  not_configured: 'bg-warn',
+}
 
 function App() {
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const bottomRef = useRef(null)
+  const [view, setView] = useState('chat')
+  const [configured, setConfigured] = useState(true)
+  const [settings, setSettings] = useState({ ollama_host: '', llm_model: '' })
+  const [connStatus, setConnStatus] = useState('not_configured')
+  const [memoryCount, setMemoryCount] = useState(0)
+
+  const refreshConnection = useCallback(async () => {
+    const ok = await window.pywebview.api.is_configured()
+    setConfigured(ok)
+    if (!ok) {
+      setConnStatus('not_configured')
+      return
+    }
+    const s = await window.pywebview.api.get_settings()
+    setSettings(s)
+    const res = await window.pywebview.api.test_ollama_connection(s.ollama_host)
+    setConnStatus(res.ok ? 'ready' : 'disconnected')
+  }, [])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    refreshConnection()
+    window.pywebview.api.get_memory().then((data) => setMemoryCount(data.length))
+  }, [refreshConnection])
 
-  const sendMessage = async () => {
-    const text = input.trim()
-    if (!text || busy) return
+  useEffect(() => {
+    if (!configured) setView('settings')
+  }, [configured])
 
-    setMessages((prev) => [...prev, { role: 'user', text }])
-    setInput('')
-    setBusy(true)
-
-    try {
-      const reply = await window.pywebview.api.send_message(text)
-      setMessages((prev) => [...prev, { role: 'assistant', text: reply }])
-    } catch (err) {
-      setMessages((prev) => [...prev, { role: 'error', text: String(err) }])
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage()
-    }
-  }
+  const [label, sub] = LABELS[view]
+  const dotClass = HEADER_DOT[connStatus] ?? HEADER_DOT.not_configured
 
   return (
-    <div className="terminal">
-      <div className="terminal-log">
-        {messages.map((m, i) => (
-          <div key={i} className={`line ${m.role}`}>
-            <span className="prompt">
-              {m.role === 'user' ? '>' : m.role === 'error' ? '!' : '#'}
+    <div className="flex h-screen w-screen bg-bg font-sans text-sm text-ink">
+      <Rail
+        current={view}
+        onChange={setView}
+        memoryCount={memoryCount}
+        connection={{ model: settings.llm_model, status: connStatus }}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {!configured && (
+          <div className="flex items-center gap-3 border-b border-[rgba(210,160,70,.28)] bg-[rgba(210,160,70,.10)] px-6 py-3">
+            <span className="font-mono text-xs text-warn">[ setup ]</span>
+            <span className="text-[13px] text-[#ebd6ae]">
+              First-time setup — point Mneme at your local Ollama, pick a model, then Save.
             </span>
-            <span className="text">{m.text}</span>
-          </div>
-        ))}
-        {busy && (
-          <div className="line assistant">
-            <span className="prompt">#</span>
-            <span className="text">...</span>
           </div>
         )}
-        <div ref={bottomRef} />
-      </div>
-      <div className="terminal-input">
-        <span className="prompt">&gt;</span>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type a message and press Enter..."
-          disabled={busy}
-          rows={1}
-        />
+
+        <header className="flex h-[58px] shrink-0 items-center justify-between border-b border-surface-3 bg-bg px-6">
+          <div className="flex items-baseline gap-3">
+            <span className="font-mono text-[11px] tracking-[.16em] text-[#6e7276] uppercase">{label}</span>
+            <span className="text-[13px] text-ink-2">{sub}</span>
+          </div>
+          <div className="flex items-center gap-2.5 rounded-full border border-[#202325] px-3 py-1.5">
+            <span className={`h-[7px] w-[7px] rounded-full ${dotClass}`} />
+            <span className="font-mono text-[11.5px] text-[#9a9ea2]">{settings.llm_model || '—'}</span>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {view === 'chat' && <Chat />}
+          {view === 'memory' && <Saved_Memory onCountChange={setMemoryCount} />}
+          {view === 'settings' && (
+            <Settings
+              onSaved={() => {
+                setConfigured(true)
+                refreshConnection()
+              }}
+            />
+          )}
+        </div>
       </div>
     </div>
   )

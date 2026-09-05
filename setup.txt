@@ -1,0 +1,154 @@
+BRAIN-RAG — WINDOWS SETUP (fresh machine, end to end)
+=======================================================
+
+Follow this in order. Every download link is a plain https:// URL you can
+paste into a browser. Do not skip the "why" notes — they explain why a step
+is pinned to a specific version instead of "just install the latest".
+
+
+STEP 0 — WHY PYTHON 3.12 SPECIFICALLY
+--------------------------------------
+This project is pinned to Python 3.12. Do NOT install the newest Python
+(3.14 as of writing) — as of this writing, chromadb, sentence-transformers,
+and torch either don't have working Windows wheels for 3.14 yet, or are
+untested on it. 3.12 is fully supported by every dependency this project
+uses. If a newer Python has since become fully supported by all of:
+chromadb, sentence-transformers, torch, and pywebview — you can reconsider,
+but don't assume it "should just work" without checking each one.
+
+
+STEP 1 — INSTALL PYTHON 3.12
+------------------------------
+1. Go to: https://www.python.org/downloads/release/python-3120/
+   (or any 3.12.x patch release — 3.12.14 is fine, patch version doesn't matter)
+2. Scroll to "Files", download "Windows installer (64-bit)".
+3. Run it. On the first installer screen:
+     - CHECK "Add python.exe to PATH" at the bottom (easy to miss — do this)
+     - Click "Install Now"
+4. Verify it worked — open a new Command Prompt (or PowerShell) and run:
+     python --version
+   It should print "Python 3.12.x". If it prints a different version (e.g.
+   3.14), you likely have another Python already on PATH ahead of this one —
+   use the full path to python.exe from the installer instead, or use the
+   Windows "py" launcher:  py -3.12 --version
+
+
+STEP 2 — INSTALL GIT
+----------------------
+1. https://git-scm.com/download/win
+2. Run the installer, default options are fine.
+3. Verify: open a new terminal, run:  git --version
+
+
+STEP 3 — INSTALL NODE.JS (for the frontend build)
+----------------------------------------------------
+1. https://nodejs.org  — download the LTS version.
+2. Run the installer, default options are fine.
+3. Verify: open a new terminal, run:  node --version   and   npm --version
+
+
+STEP 4 — INSTALL OLLAMA (runs the local LLM — this app does NOT work without it)
+-----------------------------------------------------------------------------------
+1. https://ollama.com/download/windows
+2. Run the installer. Ollama installs as a background service/tray app and
+   starts automatically — it listens on http://localhost:11434 by default.
+3. Pull the model this app is configured to use by default. Open a terminal
+   and run:
+     ollama pull qwen2.5:3b
+   (This downloads a few GB — needs internet, one-time.)
+4. Verify Ollama is reachable:
+     curl http://localhost:11434/api/tags
+   You should get back a JSON response listing "qwen2.5:3b".
+
+
+STEP 5 — CLONE THE REPO
+--------------------------
+Open a terminal wherever you want the project to live, then:
+     git clone <your-repo-url>
+     cd Brain-Rag
+
+
+STEP 6 — CREATE THE VIRTUAL ENVIRONMENT (Python 3.12, not the system default)
+-----------------------------------------------------------------------------
+     py -3.12 -m venv .venv
+(If "py -3.12" doesn't work, use the full path to the Python 3.12 you
+installed in Step 1, e.g. "C:\Users\<you>\AppData\Local\Programs\Python\
+Python312\python.exe -m venv .venv")
+
+Activate it (do this every time you open a new terminal to work on this
+project):
+     .venv\Scripts\activate
+Your prompt should now start with "(.venv)".
+
+
+STEP 7 — INSTALL PYTHON DEPENDENCIES
+---------------------------------------
+With the venv activated:
+     pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+The --extra-index-url flag matters — without it, pip may resolve a CUDA
+build of torch that pulls in multiple GB of unused NVIDIA packages. This
+app runs entirely on CPU + local Ollama, so the CPU-only torch build is
+correct and much smaller.
+
+This step downloads and installs everything (langchain, chromadb,
+sentence-transformers, torch, pywebview, etc.) — expect this to take a
+few minutes and a few GB of disk space.
+
+
+STEP 8 — BUILD THE FRONTEND
+------------------------------
+     cd frontend
+     npm install
+     npm run build
+     cd ..
+This produces frontend/dist/ — the built UI that the packaged app loads
+directly off disk (no dev server needed for this).
+
+
+STEP 9 — FIRST RUN
+---------------------
+With the venv still activated, from the project root:
+     python main.py
+A native window should open. On first launch:
+     - The embedding model (all-MiniLM-L6-v2, ~90MB) downloads automatically
+       from Hugging Face the very first time — this needs internet once.
+       After that it's cached and works fully offline.
+     - You'll likely see a first-run Settings prompt — confirm the Ollama
+       host (default http://localhost:11434) and model (qwen2.5:3b) match
+       what you set up in Step 4.
+
+
+TROUBLESHOOTING
+------------------
+- "python main.py" says ModuleNotFoundError for something in requirements.txt
+    -> Your venv isn't activated. Run .venv\Scripts\activate first, then retry.
+
+- App window never opens / errors mentioning WebView2
+    -> Windows 10/11 ships the WebView2 runtime by default, but if it's
+       somehow missing, download it here:
+       https://developer.microsoft.com/microsoft-edge/webview2/
+       (choose "Evergreen Bootstrapper")
+
+- "curl: command not found" when testing Ollama in Step 4
+    -> Use PowerShell's equivalent instead:
+       Invoke-WebRequest http://localhost:11434/api/tags
+
+- Chat/save/delete requests silently fail or hang
+    -> Almost always means Ollama isn't running, or the model name in
+       Settings doesn't match what you pulled. Re-check Step 4.
+
+- pip install fails on chromadb or a dependency during Step 7
+    -> Double check "python --version" (inside the activated venv) says
+       3.12.x, not 3.14.x or anything else. Re-do Step 6 if it's wrong —
+       most install failures trace back to the wrong Python version.
+
+
+DEV MODE (only needed if you're actively changing frontend code)
+--------------------------------------------------------------------
+Two terminals, both from the project root, venv activated in the second:
+     Terminal 1:  cd frontend  &&  npm run dev
+     Terminal 2:  python main.py --dev
+This points the app at the Vite dev server (hot reload) instead of the
+built frontend/dist/. Not needed for normal use — Step 9 (plain
+"python main.py") is what a normal end-to-end run looks like.

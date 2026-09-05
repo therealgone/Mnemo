@@ -1,3 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0b0b0c;
+  --color-surface: #0e0f10;
+  --color-surface-2: #17191a;
+  --color-surface-3: #1c1e20;
+  --color-border: #1f2123;
+  --color-border-strong: #2a2d2f;
+  --color-ink: #e8e6e3;
+  --color-ink-2: #8a8e92;
+  --color-ink-3: #5c5f63;
+
+  --color-user: oklch(0.74 0.13 250);
+  --color-agent: oklch(0.74 0.13 152);
+  --color-warn: oklch(0.74 0.13 85);
+  --color-error: oklch(0.7 0.16 28);
+
+  --font-display: "Bricolage Grotesque", sans-serif;
+  --font-sans: "Instrument Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
 :root {
   color-scheme: dark;
   font-synthesis: none;
@@ -6,14 +29,63 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
-}
-
 html,
 body,
 #root {
   margin: 0;
   height: 100%;
   width: 100%;
+}
+
+body {
+  background: var(--color-bg);
+}
+
+::selection {
+  background: #26333f;
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--color-ink-3);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232527;
+  border-radius: 8px;
+  border: 3px solid var(--color-bg);
+}
+
+@keyframes mn-blink {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes mn-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

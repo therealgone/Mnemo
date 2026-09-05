@@ -4,3 +4,9 @@ frontend/dist/
 __pycache__/
 *.pyc
 .venv/
+
+# Personal memory data — lives at ~/.brain-rag now (see config.py), but this
+# repo copy predates that move and is still tracked; ignore it going forward
+# so a shipped build never bundles real user data.
+chroma_db/
+memory.txt
