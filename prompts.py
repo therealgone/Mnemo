@@ -1,5 +1,15 @@
 # All LLM prompt templates live here, kept separate from the logic that uses them
 # so wording can be tuned without touching retrieval/memory_ops code.
+#
+# Style note that applies to every prompt below: rules are expressed over
+# sentence STRUCTURE and function words (question words, auxiliaries, removal
+# verbs, "?"), never over subject matter, and examples use angle-bracket slots
+# instead of real topics. The earlier versions few-shot the model with concrete
+# messages about specific things (a drink, a movie, a name, an appointment),
+# and a small local model doesn't extract "declarative sentence -> SAVE" from
+# those — it partly extracts "this kind of topic -> SAVE", so anything outside
+# those topics falls back to a weaker prior. Anchoring on grammar generalises;
+# anchoring on content words doesn't.
 
 from langchain_core.prompts import PromptTemplate
 
@@ -10,38 +20,43 @@ from langchain_core.prompts import PromptTemplate
 # pass tangled up with the other categories. Splitting it into its own tiny
 # binary check first is simpler and cheaper, and keeps rewrite_prompt focused
 # on messages that actually need memory handling.
+#
+# Decides on one test — "did this add or request information?" — plus a set of
+# structural shapes, rather than a list of literal example messages.
 chat_classify_prompt = PromptTemplate.from_template(
-    """Decide if this message is CHAT (casual conversation, nothing to remember, look up, or change) or NOT_CHAT (a real message: it states or changes a fact about the user, asks for stored information back, or explicitly asks to delete something).
+    """Classify the message as CHAT or NOT_CHAT.
 
-IMPORTANT: a short message is NOT automatically CHAT. Any sentence naming a
-concrete preference, possession, plan, habit, or fact about the user — even
-phrased casually, even starting with "I like", "I love", "I have", "I am",
-"I want" — is NOT_CHAT, because it's information worth remembering. CHAT is
-ONLY a pure social pleasantry with no factual content at all: a greeting,
-thanks, or a question about the assistant/conversation itself, nothing else.
+NOT_CHAT — the message does at least one of these:
+  (a) states or implies anything about the user's own life: a fact, preference, opinion, possession, relationship, plan, habit, or something they did;
+  (b) asks for something about the user to be recalled;
+  (c) commands that stored information be removed.
 
-Check the message against these examples FIRST — if it matches the pattern of one, use that answer:
-"hi" -> CHAT
-"hello" -> CHAT
-"hey there" -> CHAT
-"thanks" -> CHAT
-"thank you" -> CHAT
-"thanks!" -> CHAT
-"how are you" -> CHAT
-"what's up" -> CHAT
-"good morning" -> CHAT
-"nice to meet you" -> CHAT
-"ok" -> CHAT
-"cool" -> CHAT
-"I like coke zero" -> NOT_CHAT (a preference, worth remembering, even though it's phrased casually)
-"I like pizza" -> NOT_CHAT (a preference, worth remembering, even though it's phrased casually)
-"I love hiking on weekends" -> NOT_CHAT (a preference/habit, worth remembering)
-"what's my name" -> NOT_CHAT
-"forget my dentist appointment" -> NOT_CHAT
+CHAT — none of the above. The message is pure social contact, or is about you/the
+conversation itself: greeting, farewell, thanks, acknowledgement, a reaction to
+your last reply, or a question about what you are.
 
-These examples are illustrative only — apply the same pattern to whatever the real message says, don't let the specific example topics bias your answer.
+Decisive test — ask exactly this: after this message, is anything new known about
+the user, or is the user waiting for something to be recalled or removed?
+  yes -> NOT_CHAT
+  no  -> CHAT
 
-Respond with EXACTLY one word, nothing else: CHAT or NOT_CHAT
+Rules:
+- Length and tone decide nothing. A three-word sentence naming something in the
+  user's life is NOT_CHAT. A long, warm greeting is still CHAT.
+- Casual phrasing decides nothing. Information stated offhandedly is still information.
+- If the message mixes a pleasantry with anything about the user, answer NOT_CHAT.
+
+Shapes (the structure matters, not the subject; the angle brackets are slots that
+stand for whatever the real message says):
+  <greeting / thanks / farewell / acknowledgement>, and nothing else -> CHAT
+  <question about you, the assistant, or this conversation>          -> CHAT
+  I <like / love / hate / prefer / want / need / have / own / am> <anything> -> NOT_CHAT
+  my <attribute / person / thing> is <value>                          -> NOT_CHAT
+  I <did / am doing / will do> <activity> <optionally when or where>  -> NOT_CHAT
+  <question word or auxiliary> ... <my / I> ...                       -> NOT_CHAT
+  <forget / delete / remove / erase> <anything>                       -> NOT_CHAT
+
+Answer with EXACTLY one word, nothing else: CHAT or NOT_CHAT
 
 Message: {question}
 
@@ -55,59 +70,70 @@ Response:"""
 # SAVE deliberately merges what used to be two separate categories (NEW vs
 # EDIT). Splitting new-vs-edit here — before ever looking at what's actually
 # stored — meant a restatement with no obvious "changed"/"switched" language
-# (e.g. "I like coke zero lime" said with no memory yet of coke zero at all)
 # had no reliable signal to go on and got misclassified, so an edit-worthy
 # message could land in NEW and just get saved as an unrelated duplicate
-# instead of updating the existing coke zero memory. SAVE routes everything
-# through Memory_Trail instead (see agent.py), which retrieves first and only
-# then decides — with actual candidates in front of it — whether this is an
-# edit to something existing or nothing related exists, in which case it
-# creates a new memory itself (see memory_ops.memory_edit's NONE fallback).
-# The label only needs to know "this message provides/changes info" — the
-# new-vs-edit judgment call now happens downstream, after retrieval, where
-# there's actually enough information to make it well.
+# instead of updating the existing memory. SAVE routes everything through
+# Memory_Trail instead (see agent.py), which retrieves first and only then
+# decides — with actual candidates in front of it — whether this is an edit to
+# something existing or nothing related exists, in which case it creates a new
+# memory itself (see memory_ops.memory_edit's NONE fallback). The label only
+# needs to know "this message provides/changes info" — the new-vs-edit
+# judgment call now happens downstream, after retrieval, where there's
+# actually enough information to make it well.
 #
 # DELETE is kept deliberately narrow (explicit removal language only) rather
 # than folded into SAVE, since deletion is destructive and irreversible — a
 # vague "no longer true" should still default to SAVE (update in place, keep
-# the history in edit_trail), not silently erase the memory.
+# the history in edit_trail), not silently erase the memory. The literal
+# removal-word checklist is kept as-is: those are function words, so they
+# generalise across topics in a way content examples don't.
 rewrite_prompt = PromptTemplate(
     input_variables=["question"],
-    template="""Look at the user's message and decide what it is, then rewrite it accordingly. (Casual chit-chat is filtered out before this step — every message you see here needs real handling.)
+    template="""Label the user's message, then rewrite it according to that label.
+(Casual chit-chat is filtered out earlier — every message here needs real handling.)
 
-First, decide which ONE of these it is:
-- SAVE: the message provides or changes information about the user — a new fact, preference, plan, activity, correction, update, reschedule, or replacement. This covers both a brand-new statement ("I like coke zero") and a change to something that might already be known ("I like coke zero lime now", "I switched from chess to badminton") — don't try to tell those two apart, that decision happens later once it's known what's actually in memory.
-- DELETE: use this ONLY if the message contains one of these exact words/phrases, used as a command directed at the memory itself: "forget", "delete", "remove", "erase", "stop remembering", "get rid of". This is a hard checklist — before choosing DELETE, find the literal word in the message. If none of those words appear, it is NOT DELETE, no matter what else the message says (even "no longer", "not anymore", "used to but doesn't now" — those are SAVE, not DELETE, because nobody issued a removal command, they just stated something changed).
-  - "forget my old gym membership" -> DELETE (contains "forget")
-  - "delete the memory about my previous phone" -> DELETE (contains "delete")
-  - "my bike is no longer red" -> SAVE (no removal word present, just a changed fact)
-  - "I no longer live at my parents' house" -> SAVE (no removal word present, just a changed fact — do NOT treat "no longer" alone as a removal command)
-These examples are illustrative only — apply the same rule to whatever subject the real message is about, don't let these specific example topics bias your answer.
-- QUESTION: the message is asking for information back, using a question word or auxiliary ("what", "when", "where", "who", "which", "how", "do I", "does my", "am I", "is my", "have I") or ending in "?" — this includes questions about the user's own life/habits/preferences, not just general-knowledge questions. If it's phrased as a question, it's QUESTION even if answering it would just repeat back something like a stored preference.
+The label depends ONLY on sentence structure and command words, never on what the
+message is about. The same topic can appear under any label.
 
-Then rewrite it using the matching rule below.
+- QUESTION: the message requests information back. Test for structure, in order:
+    1. it ends with "?", OR
+    2. it opens with an interrogative word (what / when / where / who / which / why / how), OR
+    3. it opens with an inverted auxiliary about the user (do I / did I / does my / is my / am I / have I / can I / was my).
+  If none of the three holds, it is NOT a QUESTION — no matter how question-like
+  the topic feels. A declarative sentence stays declarative even when it concerns
+  something you would also expect to be asked about (a name, a date, a plan, a rating).
 
-If SAVE:
-Rewrite it into a short, DESCRIPTIVE search phrase for finding a related existing memory — name the subject plus a couple of closely related words or synonyms, not just the bare topic word, so it has a better chance of matching an existing memory even if the exact wording is different.
-- e.g. "I like coke zero lime" -> "coke zero lime, cola soft drink preference"
-- e.g. "I switched from chess to badminton on weekends" -> "weekend hobby, chess badminton sport"
-- Be descriptive enough to catch a loosely related existing memory, but don't pad it with unrelated words — over-broad phrases stop matching anything at all.
-- Do NOT turn it into a question.
-- Do NOT invent facts that aren't in the message.
+- DELETE: the message issues a removal command aimed at the stored information.
+  Hard checklist — one of these literal words/phrases must be present and used as a
+  command: "forget", "delete", "remove", "erase", "stop remembering", "get rid of".
+  If none appears literally, it is NOT DELETE. Change-of-state wording is not a
+  removal command: "no longer", "not anymore", "used to", "stopped", "changed",
+  "switched", "moved", "cancelled" all mean the fact was UPDATED, so they are SAVE.
 
-If DELETE:
-Extract a short, specific search phrase naming the exact topic/subject to be removed, so it can be matched against existing stored memories.
-- Do NOT guess the topic if it isn't clearly named.
-- Keep it short and specific, not descriptive/broad like SAVE — deletion should only match a clear, precise hit, not a loosely related one.
+- SAVE: everything else — the message provides or changes information about the
+  user. This covers both a first-time statement and a revision of something that
+  may already be stored. Do not try to tell those apart here; that decision is
+  made later, once what is actually stored is known.
 
-If QUESTION:
-Rewrite the user's question into a clear, natural, search-friendly question — the goal is to describe what's being asked about clearly enough to match how the answer is actually phrased in someone's notes, not just repeat the question word-for-word.
-- Preserve the original intent — don't change what's being asked.
-- You MAY rephrase, expand abbreviations, or state the topic more explicitly to make it easier to match against stored notes (e.g. "what's my name" -> "the user's name", "when's the appt" -> "when is the appointment").
-- Do NOT invent new facts, entities, or specifics that aren't implied by the question (e.g. don't guess a date, place, or name that wasn't mentioned).
-- Do NOT answer the question.
-- Preserve important words, names, entities, and terminology from the original question.
-- The rewritten version may be identical to the original if it's already clear and specific.
+Then rewrite:
+
+If SAVE — produce a short DESCRIPTIVE search phrase for finding a related existing
+memory. Build it as: <the main subject, in the user's own words>, <one or two
+broader category words or synonyms for that subject>. Include the attribute being
+set or changed if there is one. Keep it under about eight words: too narrow misses
+a differently-worded memory, too broad matches nothing. Do not phrase it as a
+question. Do not add facts the message does not contain.
+
+If DELETE — extract a short, specific search phrase naming the exact subject to be
+removed, including any distinguishing name, qualifier, or date the user gave.
+Keep it precise, not broad: deletion should only match a clear hit. Do not guess a
+subject that was not clearly named.
+
+If QUESTION — rewrite it as a clear, natural, search-friendly question describing
+what is being asked about, phrased the way an answer would likely be written down.
+Make the implied subject explicit and expand abbreviations. Preserve the original
+intent, plus any names, entities, and terminology from the original. Invent no
+dates, places, or names. Do not answer it. It may come out identical to the original.
 
 Respond in EXACTLY this format, one line only:
 SAVE: <descriptive search phrase>
@@ -128,6 +154,10 @@ Response:"""
 # through the plain (non-tool-bound) LLM — see agent.py's comment on why: binding
 # tools for a question makes small local models occasionally leak raw tool-call
 # JSON into the answer instead of just answering.
+#
+# Left as it was: it carries no topic-specific few-shots. The "(previously: ...)"
+# passage describes a real data format produced by agent._format_context, not an
+# example subject, so it doesn't bias anything.
 answer_prompt = PromptTemplate.from_template(
     """You are answering a question using the user's personal memory notes below.
 
@@ -161,84 +191,124 @@ Response:"""
 
 # Used by memory_edit(): given a handful of candidate chunks, picks which one the
 # edit is actually about and returns just its Chroma id (or NONE).
+#
+# The two worked examples this used to end with were replaced by an explicit
+# subject-identity procedure — the examples were doing double duty as a format
+# demo and a topic hint, and only the first of those was worth keeping (the
+# format is covered by the id='value' line).
 select_id = PromptTemplate.from_template(
-    """You are matching a user's message to the ONE stored memory it is about, so it can be updated. The message below often describes a change (e.g. "I switched from X to Y") — it is not a question, and the memory won't already contain the new information, that's expected.
+    """You are matching a user's message to the ONE stored memory it is about, so that
+memory can be updated. The message describes something new or changed — it is not a
+question, and no candidate will already contain the new information. That is expected
+and is exactly what makes a candidate out of date.
 
 Memory candidates:
 {context}
 
 User's message: {question}
 
-Instructions:
-- The user's message describes something about a subject/topic. If a candidate is about that SAME subject/topic, it is the match — pick it, even though it doesn't yet say what the message says (that's exactly what makes it out of date).
-- Only respond NONE if every candidate is about a genuinely different, unrelated subject/topic.
-- Respond with ONLY the id value, nothing else — no quotes, no labels, no explanation, no extra text.
-- For example, if the candidate is id='value', respond with exactly: value
-"""
+Procedure:
+1. Name, to yourself, the subject of the user's message — the specific person, thing,
+   plan, event, or attribute it is about.
+2. Name the subject of each candidate the same way.
+3. Pick the candidate whose subject is the SAME real-world subject. Nothing else matters.
+
+Same subject includes all of these:
+- the message gives a fuller, more precise, or corrected version of what the candidate records;
+- the message replaces the value in the same slot (a preference, a date, a place, a status);
+- the message reports that a plan, intention, or activity the candidate records has now happened.
+
+Not the same subject:
+- the candidate merely shares a word, a category, or a general theme with the message;
+- the candidate concerns a different person, thing, plan, or event.
+
+Being the only candidate, or the top-ranked one, is NOT evidence of a match. Candidates
+come from keyword and similarity search, which surfaces unrelated text on incidental word
+overlap. If no candidate is about the same real-world subject, respond NONE even when
+only one candidate exists.
+
+Respond with ONLY the id value, nothing else — no quotes, no labels, no explanation.
+If a candidate appears as id='value', respond with exactly: value
+If nothing matches, respond with exactly: NONE"""
 )
 
 # Used by memory_delete(): same shape as select_id, but deliberately much more
 # conservative, because deletion is permanent and unrecoverable (no edit_trail
 # kept afterward) — unlike an edit, a wrong pick here can't be undone by looking
 # at history. Retrieval (BM25 + vector) can surface a loosely related candidate
-# just from keyword overlap (e.g. both mention "gym") even when it isn't what the
-# user meant, so this prompt is biased hard toward NONE unless the match is clear.
+# just from keyword overlap even when it isn't what the user meant, so this
+# prompt is biased hard toward NONE unless the match is clear. The old
+# named-gym illustration is now stated as a general specificity rule instead:
+# the request's identifying details must actually appear in the candidate.
 select_id_for_delete = PromptTemplate.from_template(
-    """You are deciding whether any of these stored memories is the SPECIFIC one the user wants deleted.
+    """You are deciding whether any stored memory is the SPECIFIC one the user wants deleted.
 
 Memory candidates:
 {context}
 
 User's delete request: {question}
 
-This is a DESTRUCTIVE, PERMANENT action — once deleted, the memory cannot be recovered.
-Because of that, you must be conservative:
-- Only respond with a candidate's id if it clearly and specifically matches what the user described — same subject, not just an overlapping keyword or general topic.
-- Loosely related is NOT enough. E.g. if the user asks to forget "my membership at ZyxQuark Fitness" and a candidate talks about a workout routine at the gym but never mentions ZyxQuark Fitness, that is NOT a match — respond NONE.
-- If you have any real doubt, respond NONE. It is always better to do nothing than to delete the wrong memory.
+This is DESTRUCTIVE and PERMANENT — a deleted memory cannot be recovered. Be conservative.
 
-Respond with ONLY the id value if there is a clear, specific match, or exactly NONE otherwise — no quotes, no labels, no explanation, no extra text.
-"""
+Test: list every identifying detail in the delete request — the named entity, plus any
+qualifier, owner, place, date, or number that narrows it down. A candidate matches only
+if it is about that same specific thing: its identifying details agree, and none contradict.
+
+- Sharing a general category, activity, or keyword with the request is NOT a match.
+  If the request names a specific entity and the candidate only describes the surrounding
+  general topic without that entity, respond NONE.
+- If two candidates could both plausibly be meant, respond NONE — ambiguity is not a match.
+- If you have any real doubt at all, respond NONE. Doing nothing is always better than
+  deleting the wrong memory.
+
+Respond with ONLY the id value if there is a clear, specific match, or exactly NONE
+otherwise — no quotes, no labels, no explanation, no extra text."""
 )
 
 # Does the actual in-place rewrite: blends the old memory with what changed into
 # one coherent sentence, plus a short one-line CHANGE_SUMMARY that gets appended
 # to the edit trail (this is the "cascade-summarized" trail from ARCHITECTURE.md,
 # not a full verbatim history).
+#
+# Unlike the classifiers, this one still needs a visible example — the strict
+# NEW_CONTENT/CHANGE_SUMMARY layout is parsed by string splitting in
+# memory_ops._rewrite_in_place, so a format demo earns its place. It's written
+# with angle-bracket slots so it teaches the layout without teaching a topic.
 edit_content_prompt = PromptTemplate.from_template(
     """You are updating a stored memory based on new information from the user.
 
 Old memory: {old_content}
 
-Note: the old memory above may be given in the form page_content='...', if so, the actual memory text is only what comes after page_content=, ignore any other fields like id, metadata, Date-Time, etc, those are not part of the memory content.
+Note: the old memory may be given in the form page_content='...'. If so, the memory text
+is only what follows page_content= — ignore id, metadata, Date-Time and any other field.
 
 User's new message: {new_message}
 
 Task:
-1. Read the old memory carefully, it may contain details (people, places, times, reasons, extra facts) that are still true and should NOT be lost, even if the new message doesn't repeat them.
-2. Read the user's new message, it tells you what has changed.
-3. Write ONE new standalone sentence that keeps every still-true detail from the old memory (same people, places, times, reasons — just because the new message doesn't repeat "friends" or "the weekend" doesn't mean drop them), but naturally rewrites in the part that actually changed. Don't just paste the new message in — blend it so it reads as one coherent sentence, in third person, past tense.
-4. Write a short summary of just what changed, one past-tense sentence, no dates.
+1. Read the old memory for details that are still true — people, places, times, reasons,
+   surrounding facts. These must survive the edit even though the new message does not repeat them.
+2. Read the new message to see what actually changed.
+3. Write ONE standalone sentence, third person, past tense, that keeps every still-true
+   detail and rewrites only the part that changed. Blend it into one coherent sentence
+   rather than pasting the new message onto the old one.
+4. Write one short past-tense sentence describing only what this edit changed. No dates.
 
 Rules — do not break these:
-- Do NOT invent any person, place, name, date, number, or detail that is not present in the old memory or the new message. If you are unsure of a detail, leave it out rather than guessing.
-- Do NOT change or drop a detail from the old memory unless the new message actually contradicts it.
-- CHANGE_SUMMARY must describe only what this specific edit changed — never mention a topic, subject, or detail that doesn't appear in the old memory or the new message.
+- Invent nothing. No person, place, name, date, number, or detail that is absent from both
+  the old memory and the new message. If unsure of a detail, leave it out.
+- Drop or alter a detail from the old memory ONLY if the new message contradicts it.
+  A detail the new message is silent about is still true and must be kept.
+- CHANGE_SUMMARY describes only this edit's change. It must not mention any subject or
+  detail absent from both inputs.
 
 Respond in EXACTLY this format, nothing else:
 NEW_CONTENT: <the full updated memory, one coherent standalone sentence, keeping old context, rewritten with the change>
 CHANGE_SUMMARY: <one short past-tense sentence describing only the change>
 
-Example:
-Old memory: User has a dentist appointment on August 16th because of a toothache.
-User's new message: change my dentist appointment to the 18th
-NEW_CONTENT: User's dentist appointment for the toothache has been moved to August 18th.
-CHANGE_SUMMARY: User rescheduled the dentist appointment to August 18th.
-
-Example:
-Old memory: User wanted to go watch Spider-Man this weekend with friends, heard it was good.
-User's new message: I watched Spider-Man this weekend, it was 10 out of 10
-NEW_CONTENT: User watched Spider-Man this weekend with friends and rated it 10 out of 10.
-CHANGE_SUMMARY: User watched Spider-Man and rated it 10 out of 10.
-"""
+Format example — the angle brackets are slots standing for whatever the real inputs say.
+Never output angle brackets or the slot words themselves; copy only the layout:
+Old memory: User <did/has> <thing> at <detail A> because of <reason>.
+User's new message: change <thing> to <detail B>
+NEW_CONTENT: User's <thing> for the <reason> has moved to <detail B>.
+CHANGE_SUMMARY: User changed the <thing> to <detail B>."""
 )
