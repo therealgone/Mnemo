@@ -25,7 +25,10 @@ def main():
     url = DEV_URL if dev_mode else PROD_INDEX
 
     api = Api()
-    webview.create_window("Brain-Rag", url, js_api=api, width=1000, height=700)
+    webview.create_window(
+        "Memstra", url, js_api=api, width=1000, height=700,
+        background_color="#0b0b0c",
+    )
     webview.start(debug=dev_mode)
 
 
